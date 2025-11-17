@@ -56,19 +56,33 @@ async function main() {
   console.log("- Required signatures:", requiredSignatures);
   console.log("");
 
-  // Deploy BridgeBase contract
-  console.log("📦 Deploying BridgeBase contract...");
+  // Transaction limits
+  const maxTransactionAmount = hre.ethers.parseEther("10000"); // 10,000 tokens for testnet
+  const dailyLimit = hre.ethers.parseEther("100000"); // 100,000 tokens for testnet
 
-  const BridgeBase = await hre.ethers.getContractFactory("BridgeBase");
-  const bridge = await BridgeBase.deploy(
-    validatorAddresses,
-    requiredSignatures
-  );
+  // Deploy PolygonBridge contract (upgradeable proxy pattern)
+  console.log("📦 Deploying PolygonBridge contract...");
+
+  const PolygonBridge = await hre.ethers.getContractFactory("PolygonBridge");
+  const bridge = await PolygonBridge.deploy();
 
   await bridge.waitForDeployment();
   const bridgeAddress = await bridge.getAddress();
 
-  console.log("✅ BridgeBase deployed to:", bridgeAddress);
+  console.log("✅ PolygonBridge deployed to:", bridgeAddress);
+  console.log("");
+
+  // Initialize the bridge
+  console.log("🔧 Initializing bridge contract...");
+  const initTx = await bridge.initialize(
+    requiredSignatures,
+    validatorAddresses,
+    maxTransactionAmount,
+    dailyLimit
+  );
+  await initTx.wait();
+
+  console.log("✅ Bridge initialized successfully");
   console.log("");
 
   // Wait for a few block confirmations
@@ -110,7 +124,10 @@ async function main() {
     console.log("📝 Contract verification info:");
     console.log("To verify on block explorer, run:");
     console.log("");
-    console.log(`npx hardhat verify --network ${network} ${bridgeAddress} '${JSON.stringify(validatorAddresses)}' ${requiredSignatures}`);
+    console.log(`npx hardhat verify --network ${network} ${bridgeAddress}`);
+    console.log("");
+    console.log("Note: PolygonBridge is deployed with no constructor arguments.");
+    console.log("Initialization is done via the initialize() function separately.");
     console.log("");
 
     // Try automatic verification
@@ -118,7 +135,7 @@ async function main() {
       console.log("🔍 Attempting automatic verification...");
       await hre.run("verify:verify", {
         address: bridgeAddress,
-        constructorArguments: [validatorAddresses, requiredSignatures],
+        constructorArguments: [], // No constructor arguments for upgradeable pattern
       });
       console.log("✅ Contract verified successfully!");
     } catch (error) {
