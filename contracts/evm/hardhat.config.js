@@ -115,9 +115,6 @@ module.exports = {
     // Local Hardhat Network
     hardhat: {
       chainId: 31337,
-      forking: {
-        enabled: false,
-      },
     },
 
     // Local development
