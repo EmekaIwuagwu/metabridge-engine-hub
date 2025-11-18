@@ -34,6 +34,7 @@
 ## 📋 Table of Contents
 
 - [Architecture](#architecture)
+- [Self-Hosted Relayer System](#self-hosted-relayer-system)
 - [Supported Networks](#supported-networks)
 - [Prerequisites](#prerequisites)
 - [Quick Start](#quick-start)
@@ -91,6 +92,304 @@
 6. **Database**: PostgreSQL for persistent state and audit logs
 7. **Cache**: Redis for performance optimization
 8. **Monitoring**: Prometheus + Grafana for observability
+
+---
+
+## 🔄 Self-Hosted Relayer System
+
+Metabridge includes a **production-ready, self-hosted relayer** that eliminates dependency on third-party relayer networks. You control the entire message relay infrastructure.
+
+### Relayer Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Blockchain Networks                       │
+│  EVM (Polygon, BNB, Avalanche, ETH) | Solana | NEAR         │
+└────────────────────┬────────────────────────────────────────┘
+                     │ Lock/Burn Events
+          ┌──────────▼──────────────┐
+          │    Event Listeners      │
+          │  - EVM Listener         │
+          │  - Solana Listener      │
+          │  - NEAR Listener        │
+          └──────────┬──────────────┘
+                     │ Parse Events
+          ┌──────────▼──────────────┐
+          │    NATS Queue           │
+          │  (Message Persistence)  │
+          └──────────┬──────────────┘
+                     │ Dequeue
+          ┌──────────▼──────────────┐
+          │   Relayer Workers       │
+          │  (Configurable Pool)    │
+          └──────────┬──────────────┘
+                     │
+          ┌──────────▼──────────────┐
+          │    Message Processor    │
+          │  - Validate signatures  │
+          │  - Check security rules │
+          │  - Build transactions   │
+          └──────────┬──────────────┘
+                     │ Sign & Broadcast
+          ┌──────────▼──────────────┐
+          │  Destination Chains     │
+          │  Unlock/Mint Assets     │
+          └─────────────────────────┘
+```
+
+### Key Features
+
+✅ **Multi-Chain Support**: EVM, Solana, and NEAR processing
+✅ **Worker Pool**: Configurable concurrent message processing
+✅ **Fault Tolerance**: Automatic retry with exponential backoff
+✅ **Health Monitoring**: Per-chain health checks every 30 seconds
+✅ **Queue Persistence**: Messages survive relayer restarts
+✅ **Multi-Signature Verification**: Validates validator signatures before relay
+✅ **Transaction Confirmation**: Waits for blockchain confirmations
+✅ **Metrics & Monitoring**: Prometheus metrics for all operations
+
+### Relayer Components
+
+#### 1. Event Listeners
+
+**EVM Listener** (`internal/listener/evm/listener.go`):
+- Polls EVM chains for bridge contract events
+- Handles block confirmations (128-256 blocks)
+- Decodes `TokenLocked` and `NFTLocked` events
+- Batch processing (100 blocks at a time)
+
+**Solana Listener** (`internal/listener/solana/listener.go`):
+- Monitors Solana program accounts for lock events
+- Handles slot confirmations (32 slots)
+- Parses account data for bridge events
+- Supports SPL token and Metaplex NFT standards
+
+**NEAR Listener** (`internal/listener/near/listener.go`):
+- Queries NEAR contract events via RPC
+- Handles block confirmations (3 blocks)
+- Parses NEP-141 (token) and NEP-171 (NFT) events
+- Compatible with NEAR Indexer integration
+
+#### 2. Message Processor
+
+**Security Validation**:
+```go
+// Validates before processing
+- Multi-signature verification (2-of-3 testnet, 3-of-5 mainnet)
+- Transaction limit checks
+- Daily volume limits
+- Rate limiting per sender
+- Duplicate message detection
+```
+
+**EVM Transaction Building**:
+```solidity
+// Calls bridge contract unlock function
+unlockToken(
+    bytes32 messageId,
+    address recipient,
+    address token,
+    uint256 amount,
+    bytes[] signatures
+)
+```
+
+**Solana Transaction Building**:
+```rust
+// Builds Solana instruction
+- Program ID: Bridge program
+- Accounts: [relayer, vault_pda, recipient_ata, token_mint, token_program]
+- Data: [discriminator, message_id, amount, signatures]
+- Uses Associated Token Accounts (ATA) for recipients
+```
+
+**NEAR Transaction Building**:
+```rust
+// Builds NEAR function call
+{
+  "method_name": "unlock_token",
+  "args": {
+    "message_id": "...",
+    "recipient": "user.near",
+    "token": "token.near",
+    "amount": "1000000",
+    "signatures": ["sig1", "sig2", "sig3"]
+  },
+  "gas": 100000000000000,
+  "deposit": "0"
+}
+```
+
+### Running the Relayer
+
+#### Development Mode
+
+```bash
+# Start relayer with testnet config
+./relayer --config config/config.testnet.yaml
+```
+
+#### Production Mode (Systemd)
+
+```bash
+# Create systemd service
+sudo cat > /etc/systemd/system/metabridge-relayer.service <<EOF
+[Unit]
+Description=Metabridge Relayer Service
+After=network.target postgresql.service nats.service
+
+[Service]
+Type=simple
+User=bridge
+WorkingDirectory=/opt/metabridge
+ExecStart=/opt/metabridge/relayer --config /opt/metabridge/config/config.mainnet.yaml
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+Environment="BRIDGE_ENVIRONMENT=mainnet"
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Enable and start
+sudo systemctl enable metabridge-relayer
+sudo systemctl start metabridge-relayer
+
+# Check status
+sudo systemctl status metabridge-relayer
+sudo journalctl -u metabridge-relayer -f
+```
+
+#### Docker Deployment
+
+```bash
+# Build relayer image
+docker build -t metabridge-relayer:latest -f Dockerfile.relayer .
+
+# Run relayer container
+docker run -d \
+  --name metabridge-relayer \
+  --network metabridge-network \
+  -v /opt/metabridge/config:/config:ro \
+  -v /opt/metabridge/keys:/keys:ro \
+  -e BRIDGE_ENVIRONMENT=mainnet \
+  metabridge-relayer:latest \
+  --config /config/config.mainnet.yaml
+```
+
+### Relayer Configuration
+
+```yaml
+# config/config.mainnet.yaml
+relayer:
+  workers: 10                    # Number of concurrent workers
+  message_batch_size: 50         # Messages to process per batch
+  retry_attempts: 3              # Retry failed messages
+  retry_delay: "30s"             # Delay between retries
+  confirmation_timeout: "5m"     # Wait time for confirmations
+  health_check_interval: "30s"   # Health check frequency
+
+security:
+  required_signatures: 3         # Multi-sig threshold
+  max_transaction_value: 1000000 # Max value in USD
+  daily_volume_limit: 10000000   # Daily limit in USD
+  rate_limit_per_minute: 20      # Rate limit per sender
+```
+
+### Monitoring Relayer Health
+
+**Prometheus Metrics**:
+```prometheus
+# Messages processed
+bridge_relayer_messages_processed_total{source, destination}
+
+# Processing duration
+bridge_relayer_message_processing_duration_seconds{source, destination}
+
+# Failed messages
+bridge_relayer_messages_failed_total{source, destination, reason}
+
+# Queue depth
+bridge_queue_size
+bridge_queue_consumers
+
+# Chain health
+bridge_chain_health{chain} # 1 = healthy, 0 = unhealthy
+bridge_chain_block_number{chain}
+```
+
+**Grafana Alerts**:
+- Alert when chain health = 0 for > 5 minutes
+- Alert when failed messages > 10 in 10 minutes
+- Alert when processing duration > 60 seconds
+- Alert when queue depth > 1000 messages
+
+### Scaling the Relayer
+
+**Horizontal Scaling**:
+```bash
+# Run multiple relayer instances
+# Each worker pool processes from shared NATS queue
+# Messages are load-balanced automatically
+
+# Instance 1
+./relayer --config config.yaml --workers 10
+
+# Instance 2
+./relayer --config config.yaml --workers 10
+
+# Instance 3
+./relayer --config config.yaml --workers 10
+```
+
+**Vertical Scaling**:
+```yaml
+# Increase workers per instance
+relayer:
+  workers: 50  # Adjust based on CPU cores
+```
+
+### Transaction Signing
+
+**Development (Private Keys)**:
+```go
+// Load from environment/config
+signer, _ := evmCrypto.NewECDSASigner(privateKeyHex)
+```
+
+**Production (AWS KMS)**:
+```go
+// Use AWS KMS for secure key management
+signer, _ := kms.NewKMSSigner(kmsKeyID)
+```
+
+**Production (Hardware Security Module)**:
+```go
+// Use HSM for maximum security
+signer, _ := hsm.NewHSMSigner(hsmConfig)
+```
+
+### Troubleshooting
+
+**Relayer not processing messages**:
+1. Check NATS connection: `nats stream info BRIDGE_MESSAGES`
+2. Check database connection: `psql -U bridge_user -d metabridge`
+3. Check RPC endpoints: View health metrics
+4. Check logs: `journalctl -u metabridge-relayer -f`
+
+**Transactions failing on destination**:
+1. Verify signer has sufficient gas funds
+2. Check destination chain RPC is responsive
+3. Verify bridge contract addresses are correct
+4. Check transaction nonce management
+
+**High processing latency**:
+1. Increase worker count
+2. Optimize RPC endpoint selection
+3. Check database query performance
+4. Review gas price settings
 
 ---
 
