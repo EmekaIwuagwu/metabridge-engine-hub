@@ -327,6 +327,11 @@ func GetAuthContext(r *http.Request) *AuthContext {
 	return authCtx
 }
 
+// SetAuthContext adds auth context to a context (useful for testing)
+func SetAuthContext(ctx context.Context, authCtx *AuthContext) context.Context {
+	return context.WithValue(ctx, AuthContextKey, authCtx)
+}
+
 // RateLimiter implements token bucket rate limiting
 type RateLimiter struct {
 	limit   int

@@ -6,8 +6,12 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"strconv"
+	"strings"
 	"time"
 
+	"github.com/EmekaIwuagwu/metabridge-hub/internal/auth"
 	"github.com/EmekaIwuagwu/metabridge-hub/internal/config"
 	"github.com/EmekaIwuagwu/metabridge-hub/internal/database"
 	"github.com/EmekaIwuagwu/metabridge-hub/internal/routing"
@@ -29,6 +33,8 @@ type Server struct {
 	webhookDelivery *webhooks.DeliveryService
 	trackingService *webhooks.TrackingService
 	routingService  *routing.Service
+	authMiddleware  *auth.Middleware
+	authHandler     *auth.Handler
 }
 
 // NewServer creates a new API server
@@ -48,6 +54,11 @@ func NewServer(
 	// Initialize routing service
 	routingService := routing.NewService(db, nil, logger)
 
+	// Initialize authentication
+	authConfig := getAuthConfig()
+	authMiddleware := auth.NewMiddleware(authConfig, db, logger)
+	authHandler := auth.NewHandler(db, authConfig, logger)
+
 	s := &Server{
 		config:          cfg,
 		db:              db,
@@ -58,6 +69,8 @@ func NewServer(
 		webhookDelivery: webhookDelivery,
 		trackingService: trackingService,
 		routingService:  routingService,
+		authMiddleware:  authMiddleware,
+		authHandler:     authHandler,
 	}
 
 	// Start webhook delivery service
@@ -151,10 +164,23 @@ func (s *Server) setupRoutes() {
 	v1.HandleFunc("/routes/cache/invalidate", s.handleInvalidateCache).Methods("POST")
 	v1.HandleFunc("/routes/estimate", s.handleGetRouteEstimate).Methods("GET")
 
-	// Apply middleware
+	// Authentication endpoints (public)
+	authRouter := s.router.PathPrefix("/auth").Subrouter()
+	authRouter.HandleFunc("/login", s.authHandler.HandleLogin).Methods("POST")
+	authRouter.HandleFunc("/refresh", s.authHandler.HandleRefreshToken).Methods("POST")
+	authRouter.HandleFunc("/me", s.authHandler.HandleGetMe).Methods("GET")
+	authRouter.HandleFunc("/api-keys", s.authHandler.HandleCreateAPIKey).Methods("POST")
+	authRouter.HandleFunc("/api-keys", s.authHandler.HandleListAPIKeys).Methods("GET")
+	authRouter.HandleFunc("/api-keys/{id}", s.authHandler.HandleRevokeAPIKey).Methods("DELETE")
+
+	// Apply global middleware (order matters!)
+	s.router.Use(s.recoverMiddleware)
 	s.router.Use(s.loggingMiddleware)
 	s.router.Use(s.corsMiddleware)
-	s.router.Use(s.recoverMiddleware)
+	s.router.Use(s.authMiddleware.RateLimit)
+
+	// Apply auth middleware to v1 routes only
+	v1.Use(s.authMiddleware.AuthRequired)
 }
 
 // Start starts the API server
@@ -238,9 +264,32 @@ func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 
 func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		// Get allowed origins from environment, default to * for development
+		allowedOrigins := os.Getenv("CORS_ALLOWED_ORIGINS")
+		if allowedOrigins == "" {
+			allowedOrigins = "*"
+		}
+
+		origin := r.Header.Get("Origin")
+
+		// Check if origin is allowed
+		if allowedOrigins == "*" {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+		} else {
+			// Check if origin is in allowed list
+			allowedList := strings.Split(allowedOrigins, ",")
+			for _, allowed := range allowedList {
+				if strings.TrimSpace(allowed) == origin {
+					w.Header().Set("Access-Control-Allow-Origin", origin)
+					break
+				}
+			}
+		}
+
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key")
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+		w.Header().Set("Access-Control-Max-Age", "86400") // 24 hours
 
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
@@ -291,4 +340,40 @@ func respondError(w http.ResponseWriter, status int, message string, err error) 
 	}
 
 	respondJSON(w, status, response)
+}
+
+// getAuthConfig returns authentication configuration from environment variables
+func getAuthConfig() *auth.AuthConfig {
+	config := auth.DefaultAuthConfig()
+
+	// JWT Secret
+	if secret := os.Getenv("JWT_SECRET"); secret != "" {
+		config.JWTSecret = secret
+	}
+
+	// JWT Expiration (in hours)
+	if expiry := os.Getenv("JWT_EXPIRATION_HOURS"); expiry != "" {
+		if hours, err := strconv.Atoi(expiry); err == nil && hours > 0 {
+			config.JWTExpirationHours = hours
+		}
+	}
+
+	// Rate Limit
+	if rateLimit := os.Getenv("RATE_LIMIT_PER_MINUTE"); rateLimit != "" {
+		if limit, err := strconv.Atoi(rateLimit); err == nil && limit > 0 {
+			config.RateLimitPerMinute = limit
+		}
+	}
+
+	// Require Authentication (default: true)
+	if requireAuth := os.Getenv("REQUIRE_AUTH"); requireAuth != "" {
+		config.RequireAuth = requireAuth != "false"
+	}
+
+	// API Key Enabled (default: true)
+	if apiKeyEnabled := os.Getenv("API_KEY_ENABLED"); apiKeyEnabled != "" {
+		config.APIKeyEnabled = apiKeyEnabled != "false"
+	}
+
+	return config
 }
