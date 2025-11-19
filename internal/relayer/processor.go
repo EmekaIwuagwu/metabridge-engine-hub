@@ -621,9 +621,11 @@ func (p *Processor) buildSolanaTokenUnlockTx(ctx context.Context, msg *types.Cro
 	}
 
 	// Build instruction with all required accounts
-	instruction := &solana.Instruction{
-		ProgramID: bridgeProgramID,
-		Accounts: []*solana.AccountMeta{
+	// Note: solana.Instruction type may vary by library version
+	// Using GenericInstruction or wrapping in NewInstruction if needed
+	instruction := solana.GenericInstruction{
+		ProgID:  bridgeProgramID,
+		AccountValues: []*solana.AccountMeta{
 			{PublicKey: signerPubkey, IsSigner: true, IsWritable: false},    // Relayer signer
 			{PublicKey: bridgeProgramID, IsSigner: false, IsWritable: false}, // Bridge program
 			{PublicKey: vaultPDA, IsSigner: false, IsWritable: true},         // Token vault
@@ -633,7 +635,7 @@ func (p *Processor) buildSolanaTokenUnlockTx(ctx context.Context, msg *types.Cro
 			{PublicKey: solana.TokenProgramID, IsSigner: false, IsWritable: false}, // Token program
 			{PublicKey: solana.SystemProgramID, IsSigner: false, IsWritable: false}, // System program
 		},
-		Data: instructionData,
+		DataBytes: instructionData,
 	}
 
 	// Get recent blockhash (would need to call Solana client)
@@ -642,7 +644,7 @@ func (p *Processor) buildSolanaTokenUnlockTx(ctx context.Context, msg *types.Cro
 
 	// Build transaction
 	tx, err := solana.NewTransaction(
-		[]solana.Instruction{*instruction},
+		[]solana.Instruction{instruction},
 		recentBlockhash,
 	)
 	if err != nil {
@@ -812,7 +814,7 @@ func (p *Processor) buildNEARNFTUnlockTx(ctx context.Context, msg *types.CrossCh
 	args := UnlockNFTArgs{
 		MessageID:   msg.ID,
 		Recipient:   msg.Recipient.Raw,
-		NFTContract: payload.NFTContract,
+		NFTContract: payload.ContractAddress.Raw,
 		TokenID:     payload.TokenID,
 		Signatures:  signatures,
 	}
@@ -824,7 +826,7 @@ func (p *Processor) buildNEARNFTUnlockTx(ctx context.Context, msg *types.CrossCh
 
 	p.logger.Info().
 		Str("message_id", msg.ID).
-		Str("nft_contract", payload.NFTContract).
+		Str("nft_contract", payload.ContractAddress.Raw).
 		Str("token_id", payload.TokenID).
 		Msg("Built NEAR NFT unlock transaction")
 

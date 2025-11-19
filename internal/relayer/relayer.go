@@ -40,10 +40,7 @@ func NewRelayer(
 	logger zerolog.Logger,
 ) (*Relayer, error) {
 	// Create security validator
-	validator, err := security.NewValidator(cfg, db, logger)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create validator: %w", err)
-	}
+	validator := security.NewValidator(&cfg.Security, cfg.Environment, logger)
 
 	// Create processor
 	processor := NewProcessor(clients, signers, db, cfg, validator, logger)
@@ -121,9 +118,11 @@ func (r *Relayer) handleMessage(ctx context.Context, msg *types.CrossChainMessag
 		Msg("Handling message")
 
 	// Update metrics
-	monitoring.RelayerMessagesReceived.WithLabelValues(
+	monitoring.MessagesTotal.WithLabelValues(
 		msg.SourceChain.Name,
 		msg.DestinationChain.Name,
+		string(msg.Type),
+		"received",
 	).Inc()
 
 	// Process message
@@ -138,10 +137,11 @@ func (r *Relayer) handleMessage(ctx context.Context, msg *types.CrossChainMessag
 			Dur("duration", duration).
 			Msg("Failed to process message")
 
-		monitoring.RelayerMessagesFailed.WithLabelValues(
+		monitoring.MessagesTotal.WithLabelValues(
 			msg.SourceChain.Name,
 			msg.DestinationChain.Name,
-			"processing_error",
+			string(msg.Type),
+			"failed",
 		).Inc()
 
 		// Update message status to failed
@@ -160,9 +160,11 @@ func (r *Relayer) handleMessage(ctx context.Context, msg *types.CrossChainMessag
 		Dur("duration", duration).
 		Msg("Message processed successfully")
 
-	monitoring.RelayerMessagesProcessed.WithLabelValues(
+	monitoring.MessagesTotal.WithLabelValues(
 		msg.SourceChain.Name,
 		msg.DestinationChain.Name,
+		string(msg.Type),
+		"completed",
 	).Inc()
 
 	return nil
@@ -206,11 +208,10 @@ func (r *Relayer) performHealthCheck(ctx context.Context) {
 		}
 
 		// Update metrics
+		chainType := string(client.GetChainType())
+		monitoring.UpdateChainHealth(chainName, chainType, healthy)
 		if healthy {
-			monitoring.UpdateChainHealth(chainName, 1)
 			monitoring.UpdateChainBlockNumber(chainName, blockNumber)
-		} else {
-			monitoring.UpdateChainHealth(chainName, 0)
 		}
 
 		r.logger.Debug().
