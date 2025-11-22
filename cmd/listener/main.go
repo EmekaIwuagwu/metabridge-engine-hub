@@ -15,7 +15,6 @@ import (
 	"github.com/EmekaIwuagwu/metabridge-hub/internal/queue"
 	"github.com/EmekaIwuagwu/metabridge-hub/internal/types"
 	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 )
 
 var (
@@ -80,7 +79,7 @@ func main() {
 
 	// Start listeners based on chain type
 	for _, chainCfg := range cfg.Chains {
-		switch chainCfg.Type {
+		switch chainCfg.ChainType {
 		case types.ChainTypeEVM:
 			evmClient, ok := clients[chainCfg.Name].(*blockchain.EVMClientAdapter)
 			if !ok {
@@ -89,7 +88,7 @@ func main() {
 					Msg("Failed to cast client to EVM client")
 			}
 
-			listener, err := evm.NewListener(evmClient.Client, &chainCfg, logger)
+			listener, err := evm.NewListener(evmClient.GetUnderlyingClient(), &chainCfg, logger)
 			if err != nil {
 				logger.Fatal().
 					Err(err).
@@ -127,7 +126,7 @@ func main() {
 		default:
 			logger.Warn().
 				Str("chain", chainCfg.Name).
-				Str("type", string(chainCfg.Type)).
+				Str("type", string(chainCfg.ChainType)).
 				Msg("Unsupported chain type")
 		}
 	}

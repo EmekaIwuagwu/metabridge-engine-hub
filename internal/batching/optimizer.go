@@ -81,7 +81,7 @@ func (o *Optimizer) CalculateGasSavings(batch *Batch) (*big.Int, error) {
 
 // CalculateSavingsPercentage calculates the percentage of gas saved
 func (o *Optimizer) CalculateSavingsPercentage(batch *Batch) (float64, error) {
-	savings, err := o *Optimizer).CalculateGasSavings(batch)
+	savings, err := o.CalculateGasSavings(batch)
 	if err != nil {
 		return 0, err
 	}
