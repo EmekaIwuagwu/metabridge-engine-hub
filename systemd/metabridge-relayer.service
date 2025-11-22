@@ -1,8 +1,7 @@
 [Unit]
 Description=Metabridge Relayer Service
-After=network.target docker.service metabridge-api.service
-Requires=docker.service
-Wants=metabridge-api.service
+After=network.target postgresql.service metabridge-api.service
+Wants=postgresql.service metabridge-api.service
 
 [Service]
 Type=simple
