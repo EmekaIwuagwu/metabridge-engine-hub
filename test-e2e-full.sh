@@ -627,7 +627,7 @@ EOF
 deploy_smart_contracts() {
     log_step "Deploying smart contracts to $NETWORK..."
 
-    cd "$PROJECT_ROOT/contracts/evm"
+    cd "$PROJECT_ROOT"
 
     # Install dependencies
     if [ ! -d "node_modules" ]; then
@@ -647,22 +647,23 @@ deploy_smart_contracts() {
         for chain in "polygon-amoy" "bnb-testnet" "avalanche-fuji" "ethereum-sepolia"; do
             log_info "Deploying to $chain..."
 
+            deploy_status=0
             case $chain in
                 "polygon-amoy")
-                    npm run deploy:polygon-amoy >> "$TEST_LOG" 2>&1
+                    npm run deploy:polygon-amoy >> "$TEST_LOG" 2>&1 || deploy_status=$?
                     ;;
                 "bnb-testnet")
-                    npm run deploy:bnb-testnet >> "$TEST_LOG" 2>&1
+                    npm run deploy:bnb-testnet >> "$TEST_LOG" 2>&1 || deploy_status=$?
                     ;;
                 "avalanche-fuji")
-                    npm run deploy:avalanche-fuji >> "$TEST_LOG" 2>&1
+                    npm run deploy:avalanche-fuji >> "$TEST_LOG" 2>&1 || deploy_status=$?
                     ;;
                 "ethereum-sepolia")
-                    npm run deploy:ethereum-sepolia >> "$TEST_LOG" 2>&1
+                    npm run deploy:ethereum-sepolia >> "$TEST_LOG" 2>&1 || deploy_status=$?
                     ;;
             esac
 
-            if [ $? -eq 0 ]; then
+            if [ $deploy_status -eq 0 ]; then
                 log_success "$chain: Contract deployed"
                 DEPLOYMENT_RESULTS[$chain]="SUCCESS"
 
